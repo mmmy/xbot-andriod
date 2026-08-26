@@ -1,0 +1,11 @@
+<resources>
+    <color name="widget_text">#F4F6FA</color>
+    <color name="widget_muted">#A8B0BF</color>
+    <color name="widget_expired">#B3A8B0BF</color>
+    <color name="signal_green">#57D38C</color>
+    <color name="signal_red">#FF6B78</color>
+    <color name="signal_cyan">#66D9D2</color>
+    <color name="signal_orange">#FFB45C</color>
+    <color name="signal_purple">#B793FF</color>
+    <color name="launcher_background">#181A20</color>
+</resources>

@@ -1,0 +1,12 @@
+*.iml
+.gradle/
+.idea/
+.kotlin/
+local.properties
+build/
+captures/
+emulator-*.png
+emulator-*.xml
+.externalNativeBuild/
+.cxx/
+app/build/
