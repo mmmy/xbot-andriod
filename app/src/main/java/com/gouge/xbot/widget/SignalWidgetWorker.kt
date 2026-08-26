@@ -86,7 +86,6 @@ class SignalWidgetWorker(
         val signalsById = repository.getSignalViews().associateBy { it.id }
         widgetIds.forEach { id ->
             val current = preferences.get(id)
-            val signal = current?.let { signalsById[it.signalId] }
             when {
                 current == null -> SignalWidgetRenderer.render(
                     applicationContext,
@@ -94,13 +93,7 @@ class SignalWidgetWorker(
                     null,
                     "请重新配置小组件",
                 )
-                signal == null -> SignalWidgetRenderer.render(
-                    applicationContext,
-                    id,
-                    current,
-                    "信号已不存在",
-                )
-                else -> saveAndRender(preferences, id, current, signal)
+                else -> saveAndRender(preferences, id, current, signalsById)
             }
         }
     }
@@ -120,22 +113,39 @@ class SignalWidgetWorker(
             )
             return
         }
-        val signal = repository.getSignalView(current.signalId)
-        saveAndRender(preferences, appWidgetId, current, signal)
+        val signalsById = repository.getSignalViews().associateBy { it.id }
+        saveAndRender(preferences, appWidgetId, current, signalsById)
     }
 
     private fun saveAndRender(
         preferences: WidgetPreferences,
         appWidgetId: Int,
-        current: WidgetSnapshot,
-        signal: SignalViewDto,
+        current: WidgetState,
+        signalsById: Map<String, SignalViewDto>,
     ) {
-        val updated = WidgetSnapshot.from(
-            signal,
-            showSymbol = current.showSymbol,
+        var updatedCount = 0
+        val updatedSnapshots = current.signals.map { snapshot ->
+            signalsById[snapshot.signalId]?.let { signal ->
+                updatedCount += 1
+                WidgetSnapshot.from(
+                    signal,
+                    showSymbol = snapshot.showSymbol,
+                )
+            } ?: snapshot
+        }
+        val updatedState = WidgetState(updatedSnapshots)
+        if (updatedCount > 0) preferences.save(appWidgetId, updatedState)
+        val missingCount = current.signals.size - updatedCount
+        SignalWidgetRenderer.render(
+            applicationContext,
+            appWidgetId,
+            updatedState,
+            status = when {
+                missingCount == current.signals.size -> "信号已不存在"
+                missingCount > 0 -> "部分信号已不存在"
+                else -> null
+            },
         )
-        preferences.save(appWidgetId, updated)
-        SignalWidgetRenderer.render(applicationContext, appWidgetId, updated)
     }
 
     companion object {

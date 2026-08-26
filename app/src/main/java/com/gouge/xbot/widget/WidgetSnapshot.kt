@@ -2,6 +2,8 @@ package com.gouge.xbot.widget
 
 import com.gouge.xbot.data.SignalViewDto
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 @Serializable
 data class WidgetSnapshot(
@@ -52,4 +54,45 @@ data class WidgetSnapshot(
                 showSymbol = showSymbol,
             )
     }
+}
+
+@Serializable
+data class WidgetState(
+    val signals: List<WidgetSnapshot>,
+) {
+    init {
+        require(signals.size in 1..MaxSignals) {
+            "A widget must contain between 1 and $MaxSignals signals"
+        }
+    }
+
+    fun replace(updated: WidgetSnapshot): WidgetState = copy(
+        signals = signals.map { current ->
+            if (current.signalId == updated.signalId) updated else current
+        },
+    )
+
+    companion object {
+        const val MaxSignals = 2
+
+        fun from(
+            signals: List<SignalViewDto>,
+            showSymbol: Boolean = true,
+        ): WidgetState = WidgetState(
+            signals = signals.take(MaxSignals).map { signal ->
+                WidgetSnapshot.from(signal, showSymbol = showSymbol)
+            },
+        )
+    }
+}
+
+internal fun decodeWidgetState(
+    value: String,
+    json: Json,
+): WidgetState? = runCatching {
+    json.decodeFromString<WidgetState>(value)
+}.getOrElse {
+    runCatching {
+        WidgetState(listOf(json.decodeFromString<WidgetSnapshot>(value)))
+    }.getOrNull()
 }

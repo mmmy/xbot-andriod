@@ -66,11 +66,15 @@ class WidgetQuickSettingsActivity : ComponentActivity() {
             AppWidgetManager.INVALID_APPWIDGET_ID,
         )
         val field = QuickSettingsField.from(intent.getStringExtra(ExtraField))
+        val signalId = intent.getStringExtra(ExtraSignalId)
         val preferences = WidgetPreferences(applicationContext)
-        val snapshot = preferences.get(appWidgetId)
+        val state = preferences.get(appWidgetId)
+        val snapshot = state?.signals?.firstOrNull { it.signalId == signalId }
+            ?: state?.signals?.firstOrNull()
         if (
             appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID ||
             field == null ||
+            state == null ||
             snapshot == null
         ) {
             finish()
@@ -87,6 +91,7 @@ class WidgetQuickSettingsActivity : ComponentActivity() {
                 WidgetQuickSettingsScreen(
                     appWidgetId = appWidgetId,
                     field = field,
+                    initialState = state,
                     initialSnapshot = snapshot,
                     preferences = preferences,
                     repository = repository,
@@ -99,6 +104,7 @@ class WidgetQuickSettingsActivity : ComponentActivity() {
 
     companion object {
         const val ExtraField = "quick_settings_field"
+        const val ExtraSignalId = "quick_settings_signal_id"
     }
 }
 
@@ -118,6 +124,7 @@ enum class QuickSettingsField(val intentValue: String) {
 private fun WidgetQuickSettingsScreen(
     appWidgetId: Int,
     field: QuickSettingsField,
+    initialState: WidgetState,
     initialSnapshot: WidgetSnapshot,
     preferences: WidgetPreferences,
     repository: XbotRepository,
@@ -215,11 +222,12 @@ private fun WidgetQuickSettingsScreen(
                                 updated,
                                 showSymbol = initialSnapshot.showSymbol,
                             )
-                            preferences.save(appWidgetId, updatedSnapshot)
+                            val updatedState = initialState.replace(updatedSnapshot)
+                            preferences.save(appWidgetId, updatedState)
                             SignalWidgetRenderer.render(
                                 context,
                                 appWidgetId,
-                                updatedSnapshot,
+                                updatedState,
                                 "已保存",
                             )
                             onClose()

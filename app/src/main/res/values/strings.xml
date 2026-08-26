@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">XBot Signal</string>
     <string name="widget_name">信号设置</string>
-    <string name="widget_description">显示单个品种的信号动作、级别、方向和过期时间</string>
+    <string name="widget_description">显示一至两个信号的动作、级别、方向和过期时间</string>
     <string name="widget_refresh">刷新信号</string>
     <string name="widget_settings">编辑小组件</string>
     <string name="widget_preview_symbol">BTCUSDT</string>

@@ -25,9 +25,14 @@ object SignalWidgetRenderer {
     fun render(
         context: Context,
         appWidgetId: Int,
-        snapshot: WidgetSnapshot?,
+        state: WidgetState?,
         status: String? = null,
     ) {
+        if (state != null && state.signals.size > 1) {
+            renderDual(context, appWidgetId, state, status)
+            return
+        }
+        val snapshot = state?.signals?.firstOrNull()
         val views = RemoteViews(context.packageName, R.layout.signal_widget)
         val signal = snapshot?.toSignalViewDto()
         val comments = parseSignalComment(signal?.comment)
@@ -117,11 +122,21 @@ object SignalWidgetRenderer {
         if (snapshot != null) {
             views.setOnClickPendingIntent(
                 R.id.widget_level,
-                quickSettingsPendingIntent(context, appWidgetId, QuickSettingsField.Level),
+                quickSettingsPendingIntent(
+                    context,
+                    appWidgetId,
+                    snapshot.signalId,
+                    QuickSettingsField.Level,
+                ),
             )
             views.setOnClickPendingIntent(
                 R.id.widget_expiry,
-                quickSettingsPendingIntent(context, appWidgetId, QuickSettingsField.Expiry),
+                quickSettingsPendingIntent(
+                    context,
+                    appWidgetId,
+                    snapshot.signalId,
+                    QuickSettingsField.Expiry,
+                ),
             )
         }
 
@@ -158,6 +173,214 @@ object SignalWidgetRenderer {
         AppWidgetManager.getInstance(context).updateAppWidget(appWidgetId, views)
     }
 
+    private fun renderDual(
+        context: Context,
+        appWidgetId: Int,
+        state: WidgetState,
+        status: String?,
+    ) {
+        val views = RemoteViews(context.packageName, R.layout.signal_widget_dual)
+        val mappings = SignalIconMappingStore(context).getAll()
+        val slots = listOf(
+            CompactSlot(
+                icon = R.id.widget_dual_icon_1,
+                title = R.id.widget_dual_title_1,
+                comment = R.id.widget_dual_comment_1,
+                level = R.id.widget_dual_level_1,
+                direction = R.id.widget_dual_direction_1,
+                expiry = R.id.widget_dual_expiry_1,
+            ),
+            CompactSlot(
+                icon = R.id.widget_dual_icon_2,
+                title = R.id.widget_dual_title_2,
+                comment = R.id.widget_dual_comment_2,
+                level = R.id.widget_dual_level_2,
+                direction = R.id.widget_dual_direction_2,
+                expiry = R.id.widget_dual_expiry_2,
+            ),
+        )
+
+        state.signals.take(slots.size).zip(slots).forEach { (snapshot, slot) ->
+            renderCompactSignal(context, views, snapshot, slot, mappings)
+            views.setOnClickPendingIntent(
+                slot.level,
+                quickSettingsPendingIntent(
+                    context,
+                    appWidgetId,
+                    snapshot.signalId,
+                    QuickSettingsField.Level,
+                ),
+            )
+            views.setOnClickPendingIntent(
+                slot.expiry,
+                quickSettingsPendingIntent(
+                    context,
+                    appWidgetId,
+                    snapshot.signalId,
+                    QuickSettingsField.Expiry,
+                ),
+            )
+        }
+
+        val footer = status ?: state.signals.maxOfOrNull { it.updatedAtMillis }?.let {
+            DateTimeFormatter.ofPattern("HH:mm")
+                .withZone(ZoneId.systemDefault())
+                .format(Instant.ofEpochMilli(it))
+        } ?: "-"
+        views.setTextViewText(R.id.widget_dual_status, footer)
+
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        views.setOnClickPendingIntent(
+            R.id.widget_dual_root,
+            PendingIntent.getActivity(
+                context,
+                appWidgetId,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            ),
+        )
+
+        val settingsIntent = Intent(context, SignalWidgetConfigActivity::class.java).apply {
+            action = AppWidgetManager.ACTION_APPWIDGET_CONFIGURE
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+            data = Uri.parse("xbot-widget://settings/$appWidgetId")
+        }
+        views.setOnClickPendingIntent(
+            R.id.widget_dual_settings,
+            PendingIntent.getActivity(
+                context,
+                appWidgetId,
+                settingsIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            ),
+        )
+
+        val refreshIntent = Intent(context, SignalWidgetProvider::class.java).apply {
+            action = SignalWidgetProvider.ActionRefresh
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+            data = Uri.parse("xbot-widget://refresh/$appWidgetId")
+        }
+        views.setOnClickPendingIntent(
+            R.id.widget_dual_refresh,
+            PendingIntent.getBroadcast(
+                context,
+                appWidgetId,
+                refreshIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            ),
+        )
+
+        AppWidgetManager.getInstance(context).updateAppWidget(appWidgetId, views)
+    }
+
+    private fun renderCompactSignal(
+        context: Context,
+        views: RemoteViews,
+        snapshot: WidgetSnapshot,
+        slot: CompactSlot,
+        mappings: List<SignalIconMapping>,
+    ) {
+        val signal = snapshot.toSignalViewDto()
+        val direction = directionState(signal.longOn, signal.shortOn)
+        val expiry = formatWidgetExpiry(signal.expireAt)
+        val iconType = resolveSignalIcon(signal.name, mappings)
+        views.setViewVisibility(slot.icon, if (iconType == null) View.GONE else View.VISIBLE)
+        if (iconType != null) {
+            views.setImageViewResource(slot.icon, iconType.drawableResource(direction))
+            views.setContentDescription(
+                slot.icon,
+                "${signal.name} · ${iconType.label} · ${direction.label}",
+            )
+        }
+
+        val title = buildList {
+            if (snapshot.showSymbol && signal.symbol.isNotBlank()) add(signal.symbol)
+            if (signal.name.isNotBlank()) add(signal.name)
+        }.joinToString(" · ").ifBlank { "信号设置" }
+        val comment = compactComment(signal.comment)
+        views.setTextViewText(slot.title, title)
+        views.setTextViewText(slot.comment, comment.text)
+        views.setTextColor(slot.comment, context.getColor(comment.colorResource))
+        views.setTextViewText(slot.level, "L ${signal.levelText()} ›")
+        views.setTextViewText(slot.direction, direction.compactLabel())
+        views.setViewVisibility(
+            slot.direction,
+            if (iconType == null) View.VISIBLE else View.GONE,
+        )
+        views.setTextViewText(slot.expiry, "${compactExpiry(expiry.text)} ›")
+        views.setTextColor(slot.direction, context.getColor(direction.colorResource()))
+        views.setTextColor(
+            slot.expiry,
+            context.getColor(
+                when {
+                    expiry.isExpired -> R.color.widget_expired
+                    expiry.isExpiringSoon -> R.color.signal_orange
+                    else -> R.color.signal_cyan
+                },
+            ),
+        )
+    }
+
+    private fun compactComment(comment: String?): CompactComment {
+        val item = parseSignalComment(comment).firstOrNull()
+            ?: return CompactComment("", R.color.widget_muted)
+        val label = item.type?.label.orEmpty()
+        val text = when {
+            item.type == SignalCommentType.OpenLong -> item.text
+            item.type == SignalCommentType.OpenShort -> item.text
+            label.isEmpty() -> item.text
+            item.text.isEmpty() -> label
+            else -> "$label ${item.text}"
+        }
+        val colorResource = when (item.type) {
+            SignalCommentType.OpenLong -> R.color.signal_green
+            SignalCommentType.OpenShort -> R.color.signal_red
+            SignalCommentType.CloseLong -> R.color.signal_cyan
+            SignalCommentType.CloseShort -> R.color.signal_orange
+            null -> R.color.widget_muted
+        }
+        return CompactComment(text, colorResource)
+    }
+
+    private data class CompactComment(
+        val text: String,
+        val colorResource: Int,
+    )
+
+    private fun DirectionState.compactLabel(): String = when (this) {
+        DirectionState.LongOnly -> "B"
+        DirectionState.ShortOnly -> "S"
+        DirectionState.Both -> "B/S"
+        DirectionState.Disabled -> "—"
+    }
+
+    private fun compactExpiry(text: String): String = when {
+        text.startsWith("已过期 · ") -> text.removePrefix("已过期 · ")
+        text.startsWith("即将过期 · ") -> compactActiveExpiry(
+            text.removePrefix("即将过期 · "),
+        )
+        "有效至 " in text -> compactActiveExpiry(text.substringAfter("有效至 "))
+        "长期有效" in text -> "长期有效"
+        else -> text.substringAfterLast(" · ")
+    }
+
+    private fun compactActiveExpiry(value: String): String {
+        val exactTime = value.substringBefore(" · ")
+        val remaining = value.substringAfter(" · ", missingDelimiterValue = "")
+        return if (remaining.isEmpty()) exactTime else "$exactTime · $remaining"
+    }
+
+    private data class CompactSlot(
+        val icon: Int,
+        val title: Int,
+        val comment: Int,
+        val level: Int,
+        val direction: Int,
+        val expiry: Int,
+    )
+
     fun renderAll(context: Context) {
         val widgetIds = AppWidgetManager.getInstance(context).getAppWidgetIds(
             ComponentName(context, SignalWidgetProvider::class.java),
@@ -171,17 +394,19 @@ object SignalWidgetRenderer {
     private fun quickSettingsPendingIntent(
         context: Context,
         appWidgetId: Int,
+        signalId: String,
         field: QuickSettingsField,
     ): PendingIntent {
         val intent = Intent(context, WidgetQuickSettingsActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
             putExtra(WidgetQuickSettingsActivity.ExtraField, field.intentValue)
-            data = Uri.parse("xbot-widget://quick/$appWidgetId/${field.intentValue}")
+            putExtra(WidgetQuickSettingsActivity.ExtraSignalId, signalId)
+            data = Uri.parse("xbot-widget://quick/$appWidgetId/$signalId/${field.intentValue}")
         }
         return PendingIntent.getActivity(
             context,
-            appWidgetId,
+            "$appWidgetId:$signalId:${field.intentValue}".hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

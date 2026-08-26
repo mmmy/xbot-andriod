@@ -1,7 +1,6 @@
 package com.gouge.xbot.widget
 
 import android.content.Context
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -12,13 +11,13 @@ class WidgetPreferences(context: Context) {
     )
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun save(appWidgetId: Int, snapshot: WidgetSnapshot) {
-        preferences.edit().putString(key(appWidgetId), json.encodeToString(snapshot)).apply()
+    fun save(appWidgetId: Int, state: WidgetState) {
+        preferences.edit().putString(key(appWidgetId), json.encodeToString(state)).apply()
     }
 
-    fun get(appWidgetId: Int): WidgetSnapshot? {
+    fun get(appWidgetId: Int): WidgetState? {
         val value = preferences.getString(key(appWidgetId), null) ?: return null
-        return runCatching { json.decodeFromString<WidgetSnapshot>(value) }.getOrNull()
+        return decodeWidgetState(value, json)
     }
 
     fun remove(appWidgetId: Int) {

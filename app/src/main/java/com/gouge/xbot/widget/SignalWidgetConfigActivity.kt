@@ -19,9 +19,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -67,7 +67,7 @@ class SignalWidgetConfigActivity : ComponentActivity() {
         val sessionStore = SessionStore(applicationContext)
         val repository = XbotRepository(ServerConfigStore(applicationContext), sessionStore)
         val widgetPreferences = WidgetPreferences(applicationContext)
-        val configuredSnapshot = widgetPreferences.get(appWidgetId)
+        val configuredState = widgetPreferences.get(appWidgetId)
 
         setContent {
             XbotTheme {
@@ -75,16 +75,16 @@ class SignalWidgetConfigActivity : ComponentActivity() {
                     resumeGeneration = resumeGeneration.intValue,
                     repository = repository,
                     sessionStore = sessionStore,
-                    initiallySelectedId = configuredSnapshot?.signalId,
-                    initiallyShowSymbol = configuredSnapshot?.showSymbol ?: true,
-                    isEditing = configuredSnapshot != null,
+                    initiallySelectedIds = configuredState?.signals?.map { it.signalId }.orEmpty(),
+                    initiallyShowSymbol = configuredState?.signals?.firstOrNull()?.showSymbol ?: true,
+                    isEditing = configuredState != null,
                     onOpenLogin = {
                         startActivity(Intent(this, MainActivity::class.java))
                     },
-                    onConfirm = { signal, showSymbol ->
-                        val snapshot = WidgetSnapshot.from(signal, showSymbol = showSymbol)
-                        widgetPreferences.save(appWidgetId, snapshot)
-                        SignalWidgetRenderer.render(this, appWidgetId, snapshot)
+                    onConfirm = { signals, showSymbol ->
+                        val state = WidgetState.from(signals, showSymbol = showSymbol)
+                        widgetPreferences.save(appWidgetId, state)
+                        SignalWidgetRenderer.render(this, appWidgetId, state)
                         SignalWidgetScheduler.schedulePeriodic(applicationContext)
                         setResult(
                             RESULT_OK,
@@ -108,16 +108,16 @@ private fun SignalWidgetConfigScreen(
     resumeGeneration: Int,
     repository: XbotRepository,
     sessionStore: SessionStore,
-    initiallySelectedId: String?,
+    initiallySelectedIds: List<String>,
     initiallyShowSymbol: Boolean,
     isEditing: Boolean,
     onOpenLogin: () -> Unit,
-    onConfirm: (SignalViewDto, Boolean) -> Unit,
+    onConfirm: (List<SignalViewDto>, Boolean) -> Unit,
 ) {
     var isLoading by remember { mutableStateOf(true) }
     var needsLogin by remember { mutableStateOf(false) }
     var signals by remember { mutableStateOf(emptyList<SignalViewDto>()) }
-    var selectedId by remember { mutableStateOf(initiallySelectedId) }
+    var selectedIds by remember { mutableStateOf(initiallySelectedIds.take(WidgetState.MaxSignals)) }
     var showSymbol by remember { mutableStateOf(initiallyShowSymbol) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var reloadKey by remember { mutableIntStateOf(0) }
@@ -136,8 +136,11 @@ private fun SignalWidgetConfigScreen(
         try {
             val loadedSignals = repository.getSignalViews()
             signals = loadedSignals
-            if (loadedSignals.none { it.id == selectedId }) {
-                selectedId = loadedSignals.firstOrNull()?.id
+            selectedIds = selectedIds.filter { selectedId ->
+                loadedSignals.any { it.id == selectedId }
+            }
+            if (selectedIds.isEmpty()) {
+                selectedIds = loadedSignals.firstOrNull()?.let { listOf(it.id) }.orEmpty()
             }
         } catch (error: CancellationException) {
             throw error
@@ -180,6 +183,12 @@ private fun SignalWidgetConfigScreen(
                 onCheckedChange = { showSymbol = it },
             )
         }
+        Text(
+            text = "选择 1–2 个信号；选择两个时将使用双行紧凑布局",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
         when {
             needsLogin -> Column(
                 modifier = Modifier
@@ -232,25 +241,38 @@ private fun SignalWidgetConfigScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(signals, key = { it.id }) { signal ->
+                        val selected = signal.id in selectedIds
                         ConfigSignalCard(
                             signal = signal,
-                            selected = selectedId == signal.id,
-                            onSelect = { selectedId = signal.id },
+                            selected = selected,
+                            selectionOrder = selectedIds.indexOf(signal.id).takeIf { it >= 0 },
+                            enabled = selected || selectedIds.size < WidgetState.MaxSignals,
+                            onSelect = {
+                                selectedIds = if (selected) {
+                                    selectedIds - signal.id
+                                } else {
+                                    selectedIds + signal.id
+                                }
+                            },
                         )
                     }
                 }
                 Button(
                     onClick = {
-                        signals.firstOrNull { it.id == selectedId }?.let { signal ->
-                            onConfirm(signal, showSymbol)
+                        val selectedSignals = selectedIds.mapNotNull { selectedId ->
+                            signals.firstOrNull { it.id == selectedId }
+                        }
+                        if (selectedSignals.isNotEmpty()) {
+                            onConfirm(selectedSignals, showSymbol)
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    enabled = selectedId != null,
+                    enabled = selectedIds.isNotEmpty(),
                 ) {
-                    Text(if (isEditing) "保存设置" else "添加小组件")
+                    val action = if (isEditing) "保存设置" else "添加小组件"
+                    Text("$action（${selectedIds.size} 个信号）")
                 }
             }
         }
@@ -261,13 +283,15 @@ private fun SignalWidgetConfigScreen(
 private fun ConfigSignalCard(
     signal: SignalViewDto,
     selected: Boolean,
+    selectionOrder: Int?,
+    enabled: Boolean,
     onSelect: () -> Unit,
 ) {
     val comments = parseSignalComment(signal.comment)
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onSelect),
+            .clickable(enabled = enabled, onClick = onSelect),
     ) {
         Row(
             modifier = Modifier
@@ -275,10 +299,17 @@ private fun ConfigSignalCard(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RadioButton(selected = selected, onClick = onSelect)
+            Checkbox(
+                checked = selected,
+                onCheckedChange = { onSelect() },
+                enabled = enabled,
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "${signal.symbol}  ${signal.name}",
+                    buildString {
+                        if (selectionOrder != null) append("${selectionOrder + 1}.  ")
+                        append("${signal.symbol}  ${signal.name}")
+                    },
                     style = MaterialTheme.typography.titleMedium,
                 )
                 if (comments.isNotEmpty()) {
