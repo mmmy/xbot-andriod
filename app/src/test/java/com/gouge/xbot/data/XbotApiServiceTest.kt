@@ -1,5 +1,7 @@
 package com.gouge.xbot.data
 
+import com.gouge.xbot.domain.businessExpireAt
+import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -178,11 +180,14 @@ class XbotApiServiceTest {
                   "namePre":"_MA_",
                   "periods":"15 60",
                   "sort":2.35,
+                  "startTimeParamIndex":17,
+                  "validBarsParamIndex":0,
                   "params":[
                     {"index":"16","value":true,"comment":"假突破开仓"},
                     {"index":"17","value":12.5,"comment":"偏移"},
                     {"index":"18","value":"OFFSET","comment":"模式"},
-                    {"index":"19","value":null,"comment":"空值"}
+                    {"index":"19","value":null,"comment":"空值"},
+                    {"index":"0","value":10,"comment":"有效 K 线数"}
                   ]
                 }]
                 """.trimIndent(),
@@ -211,13 +216,36 @@ class XbotApiServiceTest {
 
         assertEquals("alert-config-1", config.id)
         assertEquals(2.35, config.sort)
-        assertEquals(listOf("true", "12.5", "OFFSET", ""), config.params.map { it.value })
+        assertEquals(17, config.startTimeParamIndex)
+        assertEquals(0, config.validBarsParamIndex)
+        assertEquals(listOf("true", "12.5", "OFFSET", "", "10"), config.params.map { it.value })
         assertEquals(123, alert.alertId)
+        assertEquals(Instant.parse("2026-08-19T10:42:30Z"), businessExpireAt(config, alert))
         assertEquals("GET", server.takeRequest().method)
         val alertsRequest = server.takeRequest()
         assertEquals("POST", alertsRequest.method)
         assertEquals("/api/customer/tv-alert/all-alert-list", alertsRequest.path)
         assertEquals("""{"cookieId":"cookie-1","namePre":"_"}""", alertsRequest.body.readUtf8())
+    }
+
+    @Test
+    fun `old and unconfigured alert configs keep business expiry unset`() = runBlocking {
+        server.enqueue(jsonResponse("""
+            [
+              {"_id":"old-config"},
+              {"_id":"unconfigured","startTimeParamIndex":null,"validBarsParamIndex":null}
+            ]
+        """.trimIndent()))
+        val api = ApiClientFactory.create(server.url("/").toString()) { "jwt-token" }
+
+        val configs = api.getTvAlertConfigs()
+
+        assertEquals(2, configs.size)
+        configs.forEach {
+            assertNull(it.startTimeParamIndex)
+            assertNull(it.validBarsParamIndex)
+            assertNull(businessExpireAt(it, TvAlertDto(alertId = 1)))
+        }
     }
 
     @Test

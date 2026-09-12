@@ -50,6 +50,8 @@ data class TvAlertConfigDto(
     val strategyAlertName: String? = null,
     val price: String? = null,
     val params: List<TvAlertParamDto> = emptyList(),
+    val startTimeParamIndex: Int? = null,
+    val validBarsParamIndex: Int? = null,
     val webhookUrl: String? = null,
     val overwriteAlert: Boolean = false,
 )
