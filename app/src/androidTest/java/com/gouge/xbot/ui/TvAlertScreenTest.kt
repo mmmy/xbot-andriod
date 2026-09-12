@@ -7,7 +7,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -21,6 +23,7 @@ import com.gouge.xbot.data.TvAlertParamDto
 import java.io.File
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 
@@ -104,10 +107,80 @@ class TvAlertScreenTest {
         saveScreenshot("business-expiry-expired-dark")
     }
 
-    private fun saveScreenshot(name: String) {
+    @Test
+    fun resetRequiresConfirmationBeforeSubmittingTheExactAlert() {
+        val target = alert(42, Instant.now().plusSeconds(900)).copy(resolution = "5S")
+        var selected: Pair<TvAlertConfigDto, TvAlertDto>? = null
+        var submitCount = 0
+        showScreen(alerts = listOf(target), onReset = { config, alert ->
+            selected = config to alert
+            submitCount++
+        })
+
+        compose.onNodeWithText("再设").performClick()
+
+        assertNull(selected)
+        assertEquals(0, submitCount)
+        compose.onNodeWithText("确认再设警报？").assertIsDisplayed()
+        compose.onNodeWithText("警报：业务过期测试").assertIsDisplayed()
+        compose.onNodeWithText("品种：BINANCE:BTCUSDT.P").assertIsDisplayed()
+        compose.onNodeWithText("周期：5S").assertIsDisplayed()
+        saveScreenshot("business-expiry-reset-confirmation", dialog = true)
+
+        compose.onNodeWithText("确认再设").performClick()
+
+        assertEquals(config to target, selected)
+        assertEquals(1, submitCount)
+        compose.onAllNodesWithText("确认再设警报？").assertCountEquals(0)
+        compose.onAllNodesWithText("TradingView 品种代码").assertCountEquals(0)
+        compose.onAllNodesWithText("删除警报？").assertCountEquals(0)
+    }
+
+    @Test
+    fun cancellingResetConfirmationDoesNotSubmit() {
+        var submitCount = 0
+        showScreen(
+            alerts = listOf(alert(42, Instant.now().plusSeconds(900))),
+            onReset = { _, _ -> submitCount++ },
+        )
+
+        compose.onNodeWithText("再设").performClick()
+        compose.onNodeWithText("取消").performClick()
+
+        assertEquals(0, submitCount)
+        compose.onAllNodesWithText("确认再设警报？").assertCountEquals(0)
+        compose.onNodeWithText("再设").assertIsDisplayed()
+    }
+
+    @Test
+    fun resetInProgressDisablesOtherMutationsAndShowsProgressOnTheTarget() {
+        val target = alert(42, Instant.now().plusSeconds(900))
+        showScreen(alerts = listOf(target), resettingAlert = TvAlertDeletionKey(config.cookieId, target.alertId))
+
+        compose.onNodeWithText("设置中").assertIsNotEnabled()
+        compose.onNodeWithText("删除").assertIsNotEnabled()
+        compose.onNodeWithText("添加").assertIsNotEnabled()
+        compose.onNodeWithText("刷新").assertIsNotEnabled()
+        compose.onNodeWithText("退出").assertIsNotEnabled()
+        saveScreenshot("business-expiry-resetting")
+    }
+
+    @Test
+    fun malformedAlertCannotBeReset() {
+        var selected: TvAlertDto? = null
+        showScreen(
+            alerts = listOf(alert(42, Instant.now()).copy(symbol = "invalid")),
+            onReset = { _, alert -> selected = alert },
+        )
+        compose.onNodeWithText("再设").assertIsNotEnabled()
+        assertNull(selected)
+    }
+
+    private fun saveScreenshot(name: String, dialog: Boolean = false) {
         val directory = InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(null)
         File(directory, "$name.png").outputStream().use {
-            compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
+            val node = if (dialog) compose.onNode(isDialog()) else compose.onRoot()
+            node.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
         }
     }
 
@@ -116,6 +189,8 @@ class TvAlertScreenTest {
         alertConfig: TvAlertConfigDto = config,
         darkTheme: Boolean = false,
         onRefresh: () -> Unit = {},
+        onReset: (TvAlertConfigDto, TvAlertDto) -> Unit = { _, _ -> },
+        resettingAlert: TvAlertDeletionKey? = null,
     ) {
         compose.setContent {
             MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else MaterialTheme.colorScheme) {
@@ -128,12 +203,14 @@ class TvAlertScreenTest {
                             alertConfigs = listOf(alertConfig),
                             visibleAlertIds = setOf(alertConfig.id),
                             tvAlertsByCookieId = mapOf(alertConfig.cookieId to alerts),
+                            resettingTvAlert = resettingAlert,
                         ),
                         onRefresh = onRefresh,
                         onLogout = {},
                         onChooseVisible = {},
                         onAddAlert = {},
                         onDeleteAlert = { _, _ -> },
+                        onResetAlert = onReset,
                     )
                 }
             }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -53,11 +54,13 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.gouge.xbot.R
 import com.gouge.xbot.data.TvAlertConfigDto
 import com.gouge.xbot.data.TvAlertDto
+import com.gouge.xbot.data.resetRequest
 import com.gouge.xbot.domain.businessExpireAt
 import com.gouge.xbot.domain.BusinessExpiryPresentation
 import com.gouge.xbot.domain.BusinessExpiryState
 import com.gouge.xbot.domain.businessExpiryPresentation
 import com.gouge.xbot.domain.matches
+import com.gouge.xbot.domain.tickerId
 import com.gouge.xbot.domain.tickerLabel
 import java.time.Instant
 import kotlinx.coroutines.delay
@@ -71,11 +74,13 @@ fun TvAlertScreen(
     onChooseVisible: () -> Unit,
     onAddAlert: (TvAlertConfigDto) -> Unit,
     onDeleteAlert: (TvAlertConfigDto, TvAlertDto) -> Unit,
+    onResetAlert: (TvAlertConfigDto, TvAlertDto) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val visibleConfigs = state.alertConfigs.filter { it.id in state.visibleAlertIds }
     val now = rememberAlertTime()
-    var pendingDeletion by remember { mutableStateOf<AlertDeletionTarget?>(null) }
+    var pendingDeletion by remember { mutableStateOf<AlertActionTarget?>(null) }
+    var pendingReset by remember { mutableStateOf<AlertActionTarget?>(null) }
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -98,19 +103,19 @@ fun TvAlertScreen(
                 onClick = onChooseVisible,
                 enabled = state.hasLoadedAlerts &&
                     !state.isLoadingAlerts &&
-                    state.deletingTvAlert == null,
+                    !state.isChangingAlerts,
             ) {
                 Text("显示")
             }
             TextButton(
                 onClick = onRefresh,
-                enabled = !state.isLoadingAlerts && state.deletingTvAlert == null,
+                enabled = !state.isLoadingAlerts && !state.isChangingAlerts,
             ) {
                 Text("刷新")
             }
             TextButton(
                 onClick = onLogout,
-                enabled = !state.isLoadingAlerts && state.deletingTvAlert == null,
+                enabled = !state.isLoadingAlerts && !state.isChangingAlerts,
             ) {
                 Text("退出")
             }
@@ -149,8 +154,13 @@ fun TvAlertScreen(
                         now = now.value,
                         onAddAlert = { onAddAlert(config) },
                         deletingAlert = state.deletingTvAlert,
+                        resettingAlert = state.resettingTvAlert,
+                        actionsEnabled = !state.isLoadingAlerts && !state.isChangingAlerts,
+                        onResetAlert = { alert ->
+                            pendingReset = AlertActionTarget(config, alert)
+                        },
                         onDeleteAlert = { alert ->
-                            pendingDeletion = AlertDeletionTarget(config, alert)
+                            pendingDeletion = AlertActionTarget(config, alert)
                         },
                     )
                 }
@@ -166,6 +176,40 @@ fun TvAlertScreen(
                 }
             }
         }
+    }
+
+    pendingReset?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingReset = null },
+            title = { Text("确认再设警报？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("警报：${target.config.title.ifBlank { "未命名警报" }}")
+                    Text("品种：${target.alert.tickerId()}")
+                    Text("周期：${target.alert.resolution}")
+                    Text("将按当前配置覆盖已有警报并重新创建。业务有效期将按新警报的创建时间重新计算。")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingReset?.let { confirmed ->
+                            pendingReset = null
+                            onResetAlert(confirmed.config, confirmed.alert)
+                        }
+                    },
+                    enabled = !state.isChangingAlerts && !state.isLoadingAlerts,
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                ) {
+                    Text("确认再设")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingReset = null }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 
     pendingDeletion?.let { target ->
@@ -197,7 +241,7 @@ fun TvAlertScreen(
     }
 }
 
-private data class AlertDeletionTarget(
+private data class AlertActionTarget(
     val config: TvAlertConfigDto,
     val alert: TvAlertDto,
 )
@@ -251,6 +295,9 @@ private fun TvAlertConfigCard(
     now: Instant,
     onAddAlert: () -> Unit,
     deletingAlert: TvAlertDeletionKey?,
+    resettingAlert: TvAlertDeletionKey?,
+    actionsEnabled: Boolean,
+    onResetAlert: (TvAlertDto) -> Unit,
     onDeleteAlert: (TvAlertDto) -> Unit,
 ) {
     val activeCount = alerts.count { it.active }
@@ -311,6 +358,7 @@ private fun TvAlertConfigCard(
                 }
                 TextButton(
                     onClick = onAddAlert,
+                    enabled = actionsEnabled,
                     modifier = Modifier.padding(start = 4.dp),
                 ) {
                     Text("添加")
@@ -325,7 +373,12 @@ private fun TvAlertConfigCard(
                         isDeleting = deletingAlert?.let {
                             it.cookieId == config.cookieId && it.alertId == alert.alertId
                         } == true,
-                        deleteEnabled = deletingAlert == null,
+                        isResetting = resettingAlert?.let {
+                            it.cookieId == config.cookieId && it.alertId == alert.alertId
+                        } == true,
+                        resetEnabled = actionsEnabled && runCatching { alert.resetRequest(config) }.isSuccess,
+                        onReset = { onResetAlert(alert) },
+                        deleteEnabled = actionsEnabled,
                         onDelete = { onDeleteAlert(alert) },
                     )
                     if (index < visibleAlerts.lastIndex || alerts.size > CollapsedAlertCount) {
@@ -358,6 +411,9 @@ private fun TvAlertRow(
     alert: TvAlertDto,
     businessExpiry: BusinessExpiryPresentation,
     isDeleting: Boolean,
+    isResetting: Boolean,
+    resetEnabled: Boolean,
+    onReset: () -> Unit,
     deleteEnabled: Boolean,
     onDelete: () -> Unit,
 ) {
@@ -365,7 +421,7 @@ private fun TvAlertRow(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
                 text = alert.tickerLabel(),
@@ -398,8 +454,17 @@ private fun TvAlertRow(
                 )
             }
             TextButton(
+                onClick = onReset,
+                enabled = resetEnabled,
+                contentPadding = PaddingValues(horizontal = 6.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+            ) {
+                Text(if (isResetting) "设置中" else "再设", maxLines = 1)
+            }
+            TextButton(
                 onClick = onDelete,
                 enabled = deleteEnabled,
+                contentPadding = PaddingValues(horizontal = 6.dp),
             ) {
                 Text(
                     text = if (isDeleting) "删除中" else "删除",

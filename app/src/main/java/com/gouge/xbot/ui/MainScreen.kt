@@ -86,6 +86,7 @@ fun MainScreen(viewModel: MainViewModel) {
                         onChooseVisible = { showAlertVisibility = true },
                         onAddAlert = viewModel::openAlertSetup,
                         onDeleteAlert = viewModel::deleteTvAlert,
+                        onResetAlert = viewModel::resetTvAlert,
                         modifier = Modifier.weight(1f),
                     )
                 }

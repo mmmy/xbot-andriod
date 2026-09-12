@@ -82,6 +82,16 @@ class XbotRepository(
         )
     }
 
+    suspend fun resetTvAlert(
+        config: TvAlertConfigDto,
+        alert: TvAlertDto,
+        knownAlertIds: Set<Long>,
+        onSubmitted: () -> Unit,
+    ): TvAlertResetResult {
+        check(!sessionStore.getAccessToken().isNullOrBlank()) { "请先登录" }
+        return TvAlertResetter(authenticatedApi()).reset(config, alert, knownAlertIds, onSubmitted)
+    }
+
     suspend fun updateSignalSettings(
         signalId: String,
         periods: List<String>,

@@ -87,6 +87,17 @@ data class AddTvAlertRequest(
     val alertId: String,
     val symbols: String,
     val periods: String,
+    val overwrite: Boolean? = null,
+)
+
+@Serializable
+data class TvAlertProcessDto(
+    val alertId: String,
+    val startDate: Long = 0,
+    val status: String = "",
+    val maxAlerts: Int = 0,
+    val finishedAlerts: Int = 0,
+    val msg: String = "",
 )
 
 @Serializable

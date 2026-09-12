@@ -8,6 +8,7 @@ import com.gouge.xbot.data.SignalViewDto
 import com.gouge.xbot.data.AlertVisibilityStore
 import com.gouge.xbot.data.TvAlertConfigDto
 import com.gouge.xbot.data.TvAlertDto
+import com.gouge.xbot.data.TvAlertResetResult
 import com.gouge.xbot.data.XbotRepository
 import com.gouge.xbot.domain.tickerLabel
 import com.gouge.xbot.domain.normalizeTradingViewTicker
@@ -40,7 +41,11 @@ data class MainUiState(
     val alertSetupErrorMessage: String? = null,
     val alertActionMessage: String? = null,
     val deletingTvAlert: TvAlertDeletionKey? = null,
-)
+    val resettingTvAlert: TvAlertDeletionKey? = null,
+) {
+    val isChangingAlerts: Boolean
+        get() = isCreatingAlert || deletingTvAlert != null || resettingTvAlert != null
+}
 
 data class TvAlertDeletionKey(
     val cookieId: String,
@@ -131,7 +136,7 @@ class MainViewModel(
 
     fun loadAlerts(force: Boolean = false) {
         val current = _uiState.value
-        if (current.isLoadingAlerts || (!force && current.hasLoadedAlerts)) return
+        if (current.resettingTvAlert != null || current.isLoadingAlerts || (!force && current.hasLoadedAlerts)) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAlerts = true, alertErrorMessage = null) }
             try {
@@ -175,6 +180,7 @@ class MainViewModel(
     }
 
     fun openAlertSetup(config: TvAlertConfigDto) {
+        if (_uiState.value.isChangingAlerts) return
         _uiState.update {
             it.copy(
                 quickAlertConfig = config,
@@ -196,7 +202,7 @@ class MainViewModel(
 
     fun createTvAlert(tickerInput: String, periods: List<String>) {
         val config = _uiState.value.quickAlertConfig ?: return
-        if (_uiState.value.isCreatingAlert) return
+        if (_uiState.value.isChangingAlerts) return
         viewModelScope.launch {
             _uiState.update {
                 it.copy(isCreatingAlert = true, alertSetupErrorMessage = null)
@@ -240,7 +246,7 @@ class MainViewModel(
     }
 
     fun deleteTvAlert(config: TvAlertConfigDto, alert: TvAlertDto) {
-        if (_uiState.value.deletingTvAlert != null) return
+        if (_uiState.value.isChangingAlerts) return
         val deletionKey = TvAlertDeletionKey(config.cookieId, alert.alertId)
         viewModelScope.launch {
             _uiState.update {
@@ -288,6 +294,52 @@ class MainViewModel(
                     }
                 }
             }
+        }
+    }
+
+    fun resetTvAlert(config: TvAlertConfigDto, alert: TvAlertDto) {
+        val current = _uiState.value
+        if (current.isChangingAlerts || current.isLoadingAlerts) return
+        val key = TvAlertDeletionKey(config.cookieId, alert.alertId)
+        val knownIds = current.tvAlertsByCookieId[config.cookieId].orEmpty().mapTo(hashSetOf()) { it.alertId }
+        val label = "${alert.tickerLabel()} · ${alert.resolution}"
+        // Acquire the UI lock before launching so a second tap cannot submit again.
+        _uiState.update {
+            it.copy(resettingTvAlert = key, alertErrorMessage = null, alertActionMessage = null)
+        }
+        viewModelScope.launch {
+            try {
+                when (val result = repository.resetTvAlert(config, alert, knownIds) {
+                    _uiState.update { it.copy(alertActionMessage = "已提交再设 $label，等待设置完成") }
+                }) {
+                    is TvAlertResetResult.Completed -> _uiState.update {
+                        it.copy(
+                            tvAlertsByCookieId = it.tvAlertsByCookieId + (config.cookieId to result.alerts),
+                            alertActionMessage = "$label 已重新设置",
+                        )
+                    }
+                    is TvAlertResetResult.Failed -> {
+                        _uiState.update { it.copy(alertActionMessage = "再设未完成：${result.message}") }
+                    }
+                    is TvAlertResetResult.Unconfirmed -> {
+                        _uiState.update { it.copy(alertActionMessage = result.message) }
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (error is HttpException && error.code() == 401) {
+                    handleAlertError(error)
+                } else {
+                    _uiState.update {
+                        it.copy(alertActionMessage = "再设结果未确认：${error.toUserMessage()}，请刷新检查后再操作")
+                    }
+                }
+            } finally {
+                _uiState.update { it.copy(resettingTvAlert = null) }
+            }
+            // Reload the config too: the backend rebuilds using its current parameters.
+            if (_uiState.value.isAuthenticated) loadAlerts(force = true)
         }
     }
 
@@ -355,7 +407,7 @@ class MainViewModel(
     }
 
     fun logout() {
-        if (_uiState.value.isLoading) return
+        if (_uiState.value.isLoading || _uiState.value.resettingTvAlert != null) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             repository.logout()

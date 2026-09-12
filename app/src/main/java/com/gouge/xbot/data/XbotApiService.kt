@@ -22,6 +22,9 @@ interface XbotApiService {
     @POST("api/customer/tv-alert/add-alerts")
     suspend fun addTvAlerts(@Body request: AddTvAlertRequest): OperationResultDto
 
+    @GET("api/customer/tv-alert/alert-process-status")
+    suspend fun getTvAlertProcesses(): List<TvAlertProcessDto>
+
     @POST("api/customer/tv-alert/delete-by-tv-alert-id")
     suspend fun deleteTvAlertById(
         @Body request: DeleteTvAlertByIdRequest,

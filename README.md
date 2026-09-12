@@ -15,6 +15,7 @@ XBot 的 Android 信号查看器和桌面小组件。应用登录现有 XBot 后
 - 警报配置默认按 `sort` 升序排列，未设置排序值的配置显示在最后
 - 每项警报配置可为任意单个 TradingView 品种创建警报；支持完整代码或默认 Binance 简写
 - 可删除单条已创建的 TradingView 警报，并在执行前二次确认
+- 每条警报可点击「再设」，先展示警报名称、品种、周期及覆盖说明，点击「确认再设」后才按当前配置及该警报的品种、周期调用 `add-alerts`（`overwrite: true`），取消或关闭弹窗不提交；由后端处理覆盖，客户端不另行删除警报，等待处理完成并确认新警报后刷新有效期，处理中禁用重复操作
 - 在应用内设置时间级别和过期时间，并同步刷新桌面小组件
 - 支持手动刷新、退出登录及登录失效处理
 - 为每个桌面小组件独立选择一至两个信号，并可选择是否显示品种名称
@@ -54,6 +55,7 @@ Debug APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。
 - `GET /api/customer/tv-alert/list`
 - `POST /api/customer/tv-alert/all-alert-list`
 - `POST /api/customer/tv-alert/add-alerts`
+- `GET /api/customer/tv-alert/alert-process-status`
 - `POST /api/customer/logout`
 
 后端的 Customer Swagger 文档默认位于 `http://localhost:3002/customer-api`，OpenAPI JSON 位于 `http://localhost:3002/customer-api-json`。
