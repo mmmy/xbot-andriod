@@ -59,19 +59,33 @@ class XbotRepository(
     }
 
     suspend fun addTvAlerts(
-        configId: String,
+        config: TvAlertConfigDto,
         ticker: String,
         periods: List<String>,
+        onSubmitted: () -> Unit = {},
     ): OperationResultDto {
         check(!sessionStore.getAccessToken().isNullOrBlank()) { "请先登录" }
         require(periods.isNotEmpty()) { "请至少选择一个级别" }
-        return authenticatedApi().addTvAlerts(
-            AddTvAlertRequest(
-                alertId = configId,
+        val api = authenticatedApi()
+        val previousIds = api.getTvAlerts(TvAlertListRequest(config.cookieId, "_")).mapTo(hashSetOf()) { it.alertId }
+        val request = AddTvAlertRequest(
+                alertId = config.id,
                 symbols = normalizeTradingViewTicker(ticker),
                 periods = sortSignalPeriods(periods).joinToString(" "),
-            ),
+            )
+        return api.addTvAlertsAndWait(
+            request,
+            onSubmitted = onSubmitted,
+            verifyCreated = { count -> api.awaitCreatedAlerts(config, request, previousIds, count) },
         )
+    }
+
+    suspend fun refreshTradingViewCache(cookieIds: Set<String>) {
+        val api = authenticatedApi()
+        cookieIds.filter(String::isNotBlank).forEach { cookieId ->
+            val result = api.refreshTradingViewCache(RefreshAlertCacheRequest(cookieId))
+            check(result.result) { result.msg.ifBlank { "刷新 TradingView 缓存失败" } }
+        }
     }
 
     suspend fun deleteTvAlert(cookieId: String, alertId: Long): OperationResultDto {

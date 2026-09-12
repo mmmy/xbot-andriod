@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,18 +18,26 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.Card
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -62,6 +71,7 @@ import com.gouge.xbot.domain.businessExpiryPresentation
 import com.gouge.xbot.domain.matches
 import com.gouge.xbot.domain.tickerId
 import com.gouge.xbot.domain.tickerLabel
+import com.gouge.xbot.widget.AlertWidgetTarget
 import java.time.Instant
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -76,11 +86,21 @@ fun TvAlertScreen(
     onDeleteAlert: (TvAlertConfigDto, TvAlertDto) -> Unit,
     onResetAlert: (TvAlertConfigDto, TvAlertDto) -> Unit,
     modifier: Modifier = Modifier,
+    onRefreshCache: (() -> Unit)? = null,
+    widgetTarget: AlertWidgetTarget? = null,
 ) {
     val visibleConfigs = state.alertConfigs.filter { it.id in state.visibleAlertIds }
     val now = rememberAlertTime()
     var pendingDeletion by remember { mutableStateOf<AlertActionTarget?>(null) }
     var pendingReset by remember { mutableStateOf<AlertActionTarget?>(null) }
+    var moreMenu by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(widgetTarget, state.hasLoadedAlerts, visibleConfigs.map { it.id }) {
+        if (widgetTarget != null) {
+            val index = visibleConfigs.indexOfFirst { it.id == widgetTarget.configId }
+            if (index >= 0) listState.scrollToItem(index)
+        }
+    }
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -119,6 +139,18 @@ fun TvAlertScreen(
             ) {
                 Text("退出")
             }
+            if (onRefreshCache != null) {
+                Box {
+                    IconButton(onClick = { moreMenu = true }, enabled = !state.isChangingAlerts && !state.isLoadingAlerts,
+                        modifier = Modifier.size(32.dp).semantics { contentDescription = "更多操作" }) {
+                        Text("⋮", style = MaterialTheme.typography.titleLarge)
+                    }
+                    DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                        DropdownMenuItem(text = { Text("刷新 TradingView 缓存") },
+                            enabled = state.visibleAlertIds.isNotEmpty(), onClick = { moreMenu = false; onRefreshCache() })
+                    }
+                }
+            }
         }
         HorizontalDivider()
         state.alertErrorMessage?.let {
@@ -140,6 +172,7 @@ fun TvAlertScreen(
             state.alertConfigs.isEmpty() -> EmptyAlerts("暂无警报配置")
             visibleConfigs.isEmpty() -> EmptyAlerts("未选择要显示的警报，请点击右上角“显示”进行选择")
             else -> LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -152,6 +185,7 @@ fun TvAlertScreen(
                         config = config,
                         alerts = alerts,
                         now = now.value,
+                        targetAlertId = widgetTarget?.takeIf { it.configId == config.id }?.alertId,
                         onAddAlert = { onAddAlert(config) },
                         deletingAlert = state.deletingTvAlert,
                         resettingAlert = state.resettingTvAlert,
@@ -299,6 +333,7 @@ private fun TvAlertConfigCard(
     actionsEnabled: Boolean,
     onResetAlert: (TvAlertDto) -> Unit,
     onDeleteAlert: (TvAlertDto) -> Unit,
+    targetAlertId: Long? = null,
 ) {
     val activeCount = alerts.count { it.active }
     val inactiveCount = alerts.size - activeCount
@@ -307,6 +342,7 @@ private fun TvAlertConfigCard(
     }
     val expiredCount = expiresAtByAlertId.values.count { it != null && it <= now }
     var expanded by rememberSaveable(config.id) { mutableStateOf(false) }
+    LaunchedEffect(targetAlertId) { if (targetAlertId != null) expanded = true }
     val visibleAlerts = if (expanded) alerts else alerts.take(CollapsedAlertCount)
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -369,6 +405,7 @@ private fun TvAlertConfigCard(
                 visibleAlerts.forEachIndexed { index, alert ->
                     TvAlertRow(
                         alert = alert,
+                        isTarget = alert.alertId == targetAlertId,
                         businessExpiry = businessExpiryPresentation(expiresAtByAlertId[alert.alertId], now),
                         isDeleting = deletingAlert?.let {
                             it.cookieId == config.cookieId && it.alertId == alert.alertId
@@ -416,8 +453,13 @@ private fun TvAlertRow(
     onReset: () -> Unit,
     deleteEnabled: Boolean,
     onDelete: () -> Unit,
+    isTarget: Boolean = false,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    val bringIntoView = remember { BringIntoViewRequester() }
+    LaunchedEffect(isTarget) {
+        if (isTarget) { withFrameNanos { }; bringIntoView.bringIntoView() }
+    }
+    Column(modifier = Modifier.fillMaxWidth().bringIntoViewRequester(bringIntoView).padding(horizontal = 16.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

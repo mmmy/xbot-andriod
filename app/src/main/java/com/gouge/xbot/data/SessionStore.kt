@@ -1,6 +1,7 @@
 package com.gouge.xbot.data
 
 import android.content.Context
+import android.content.Intent
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -11,6 +12,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 class SessionStore(context: Context) {
+    private val context = context.applicationContext
     private val preferences = context.applicationContext.getSharedPreferences(
         PreferencesName,
         Context.MODE_PRIVATE,
@@ -44,10 +46,16 @@ class SessionStore(context: Context) {
             .putString(TokenKey, Base64.encodeToString(encrypted, Base64.NO_WRAP))
             .putString(TokenIvKey, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
             .apply()
+        notifyChanged()
     }
 
     fun clear() {
         preferences.edit().clear().apply()
+        notifyChanged()
+    }
+
+    private fun notifyChanged() {
+        context.sendBroadcast(Intent(ActionSessionChanged).setPackage(context.packageName))
     }
 
     private fun getOrCreateSecretKey(): SecretKey {
@@ -69,7 +77,8 @@ class SessionStore(context: Context) {
         }
     }
 
-    private companion object {
+    companion object {
+        const val ActionSessionChanged = "com.gouge.xbot.action.ALERT_SESSION_CHANGED"
         const val PreferencesName = "xbot_secure_session"
         const val TokenKey = "access_token_ciphertext"
         const val TokenIvKey = "access_token_iv"

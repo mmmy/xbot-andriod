@@ -61,6 +61,7 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     // Compose's transitive Espresso 3.5 cannot inject events on Android 16.
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:5.1.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

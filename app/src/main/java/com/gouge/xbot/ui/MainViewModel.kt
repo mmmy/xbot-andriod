@@ -12,12 +12,14 @@ import com.gouge.xbot.data.TvAlertResetResult
 import com.gouge.xbot.data.XbotRepository
 import com.gouge.xbot.domain.tickerLabel
 import com.gouge.xbot.domain.normalizeTradingViewTicker
+import com.gouge.xbot.widget.AlertDataCoordinator
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
@@ -42,9 +44,10 @@ data class MainUiState(
     val alertActionMessage: String? = null,
     val deletingTvAlert: TvAlertDeletionKey? = null,
     val resettingTvAlert: TvAlertDeletionKey? = null,
+    val isRefreshingAlertCache: Boolean = false,
 ) {
     val isChangingAlerts: Boolean
-        get() = isCreatingAlert || deletingTvAlert != null || resettingTvAlert != null
+        get() = isCreatingAlert || deletingTvAlert != null || resettingTvAlert != null || isRefreshingAlertCache
 }
 
 data class TvAlertDeletionKey(
@@ -57,6 +60,7 @@ class MainViewModel(
     private val serverConfigStore: ServerConfigStore,
     private val sessionStore: SessionStore,
     private val alertVisibilityStore: AlertVisibilityStore,
+    private val alertSync: AlertDataCoordinator,
     private val onSignalsChanged: () -> Unit,
 ) : ViewModel() {
     private val initialAuthenticated = !sessionStore.getAccessToken().isNullOrBlank()
@@ -71,6 +75,22 @@ class MainViewModel(
 
     init {
         if (initialAuthenticated) refresh()
+        viewModelScope.launch {
+            alertSync.snapshots.collect { snapshot ->
+                if (!_uiState.value.isAuthenticated) return@collect
+                if (sessionStore.getAccessToken().isNullOrBlank()) {
+                    _uiState.value = MainUiState(serverConfigStore.getBaseUrl(), isAuthenticated = false)
+                } else if (snapshot != null && snapshot.updatedAtMillis > 0) {
+                    _uiState.update { it.copy(
+                        alertConfigs = snapshot.configs,
+                        visibleAlertIds = alertVisibilityStore.getVisibleIds().intersect(snapshot.configs.mapTo(hashSetOf()) { config -> config.id }),
+                        tvAlertsByCookieId = snapshot.alertsByCookieId,
+                        hasLoadedAlerts = true,
+                        alertErrorMessage = snapshot.error,
+                    ) }
+                }
+            }
+        }
     }
 
     fun login(serverUrl: String, username: String, password: String) {
@@ -140,15 +160,10 @@ class MainViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAlerts = true, alertErrorMessage = null) }
             try {
-                val configs = repository.getTvAlertConfigs()
-                val visibleIds = alertVisibilityStore.resolveVisibleIds(configs)
-                val alerts = repository.getTvAlerts(
-                    configs
-                        .asSequence()
-                        .filter { it.id in visibleIds }
-                        .map { it.cookieId }
-                        .toSet(),
-                )
+                val snapshot = alertSync.refresh(initializeHomeSelection = true)
+                val configs = snapshot.configs
+                val visibleIds = alertVisibilityStore.getVisibleIds().intersect(configs.mapTo(hashSetOf()) { it.id })
+                val alerts = snapshot.alertsByCookieId
                 _uiState.update {
                     it.copy(
                         alertConfigs = configs,
@@ -173,10 +188,10 @@ class MainViewModel(
             it.copy(
                 visibleAlertIds = ids.intersect(configs.mapTo(linkedSetOf()) { config -> config.id }),
                 hasLoadedAlerts = false,
-                tvAlertsByCookieId = emptyMap(),
             )
         }
-        loadAlerts()
+        alertSync.changed()
+        loadAlerts(force = true)
     }
 
     fun openAlertSetup(config: TvAlertConfigDto) {
@@ -209,7 +224,9 @@ class MainViewModel(
             }
             try {
                 val ticker = normalizeTradingViewTicker(tickerInput)
-                val result = repository.addTvAlerts(config.id, ticker, periods)
+                val result = repository.addTvAlerts(config, ticker, periods) {
+                    _uiState.update { it.copy(alertActionMessage = "已提交警报，等待创建完成") }
+                }
                 if (result.result) {
                     _uiState.update {
                         it.copy(
@@ -219,7 +236,6 @@ class MainViewModel(
                             alertActionMessage = result.msg.ifBlank { "$ticker 警报设置成功" },
                         )
                     }
-                    loadAlerts(force = true)
                 } else {
                     _uiState.update {
                         it.copy(
@@ -241,6 +257,9 @@ class MainViewModel(
                         )
                     }
                 }
+            } finally {
+                _uiState.update { it.copy(isCreatingAlert = false) }
+                if (_uiState.value.isAuthenticated) loadAlerts(force = true)
             }
         }
     }
@@ -259,6 +278,7 @@ class MainViewModel(
             try {
                 val result = repository.deleteTvAlert(config.cookieId, alert.alertId)
                 if (result.result) {
+                    alertSync.removeAlert(config.cookieId, alert.alertId)
                     _uiState.update { state ->
                         state.copy(
                             tvAlertsByCookieId = state.tvAlertsByCookieId + (
@@ -312,11 +332,12 @@ class MainViewModel(
                 when (val result = repository.resetTvAlert(config, alert, knownIds) {
                     _uiState.update { it.copy(alertActionMessage = "已提交再设 $label，等待设置完成") }
                 }) {
-                    is TvAlertResetResult.Completed -> _uiState.update {
-                        it.copy(
+                    is TvAlertResetResult.Completed -> {
+                        alertSync.replaceAccount(config.cookieId, result.alerts)
+                        _uiState.update { it.copy(
                             tvAlertsByCookieId = it.tvAlertsByCookieId + (config.cookieId to result.alerts),
                             alertActionMessage = "$label 已重新设置",
-                        )
+                        ) }
                     }
                     is TvAlertResetResult.Failed -> {
                         _uiState.update { it.copy(alertActionMessage = "再设未完成：${result.message}") }
@@ -339,6 +360,27 @@ class MainViewModel(
                 _uiState.update { it.copy(resettingTvAlert = null) }
             }
             // Reload the config too: the backend rebuilds using its current parameters.
+            if (_uiState.value.isAuthenticated) loadAlerts(force = true)
+        }
+    }
+
+    fun refreshTradingViewCache() {
+        val current = _uiState.value
+        if (current.isChangingAlerts || current.isLoadingAlerts) return
+        val cookies = current.alertConfigs.filter { it.id in current.visibleAlertIds }.mapTo(hashSetOf()) { it.cookieId }
+        if (cookies.isEmpty()) return
+        _uiState.update { it.copy(isRefreshingAlertCache = true, alertActionMessage = "正在刷新 TradingView 缓存…") }
+        viewModelScope.launch {
+            try {
+                repository.refreshTradingViewCache(cookies)
+                _uiState.update { it.copy(alertActionMessage = "TradingView 缓存已刷新") }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                handleAlertError(error)
+            } finally {
+                _uiState.update { it.copy(isRefreshingAlertCache = false) }
+            }
             if (_uiState.value.isAuthenticated) loadAlerts(force = true)
         }
     }
@@ -407,7 +449,7 @@ class MainViewModel(
     }
 
     fun logout() {
-        if (_uiState.value.isLoading || _uiState.value.resettingTvAlert != null) return
+        if (_uiState.value.isLoading || _uiState.value.isChangingAlerts) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             repository.logout()

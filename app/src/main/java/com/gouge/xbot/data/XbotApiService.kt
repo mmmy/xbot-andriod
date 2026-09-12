@@ -25,6 +25,9 @@ interface XbotApiService {
     @GET("api/customer/tv-alert/alert-process-status")
     suspend fun getTvAlertProcesses(): List<TvAlertProcessDto>
 
+    @POST("api/customer/tv-alert/system-alert-cache/refresh")
+    suspend fun refreshTradingViewCache(@Body request: RefreshAlertCacheRequest): OperationResultDto
+
     @POST("api/customer/tv-alert/delete-by-tv-alert-id")
     suspend fun deleteTvAlertById(
         @Body request: DeleteTvAlertByIdRequest,

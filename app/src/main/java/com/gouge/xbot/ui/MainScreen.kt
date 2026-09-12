@@ -51,9 +51,10 @@ import com.gouge.xbot.domain.parseSignalComment
 import com.gouge.xbot.widget.SignalIconMapping
 import com.gouge.xbot.widget.SignalIconMappingStore
 import com.gouge.xbot.widget.SignalWidgetRenderer
+import com.gouge.xbot.widget.AlertWidgetTarget
 
 @Composable
-fun MainScreen(viewModel: MainViewModel) {
+fun MainScreen(viewModel: MainViewModel, widgetTarget: AlertWidgetTarget? = null, resumeGeneration: Int = 0) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current.applicationContext
     val mappingStore = remember { SignalIconMappingStore(context) }
@@ -87,6 +88,8 @@ fun MainScreen(viewModel: MainViewModel) {
                         onAddAlert = viewModel::openAlertSetup,
                         onDeleteAlert = viewModel::deleteTvAlert,
                         onResetAlert = viewModel::resetTvAlert,
+                        onRefreshCache = viewModel::refreshTradingViewCache,
+                        widgetTarget = widgetTarget,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -99,11 +102,12 @@ fun MainScreen(viewModel: MainViewModel) {
             )
         }
     }
-    LaunchedEffect(state.isAuthenticated, page) {
+    LaunchedEffect(widgetTarget) { if (widgetTarget != null) page = MainPage.Alerts }
+    LaunchedEffect(state.isAuthenticated, page, resumeGeneration) {
         if (!state.isAuthenticated) {
             page = MainPage.Alerts
         } else if (page == MainPage.Alerts) {
-            viewModel.loadAlerts()
+            viewModel.loadAlerts(force = resumeGeneration > 0)
         }
     }
     state.editingSignal?.let { signal ->

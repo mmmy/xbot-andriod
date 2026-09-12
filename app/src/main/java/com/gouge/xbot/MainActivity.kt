@@ -1,6 +1,9 @@
 package com.gouge.xbot
 
 import android.os.Bundle
+import android.content.Intent
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModel
@@ -14,10 +17,16 @@ import com.gouge.xbot.ui.MainScreen
 import com.gouge.xbot.ui.MainViewModel
 import com.gouge.xbot.ui.theme.XbotTheme
 import com.gouge.xbot.widget.SignalWidgetScheduler
+import com.gouge.xbot.widget.AlertDataCoordinator
+import com.gouge.xbot.widget.AlertWidgetTarget
+import com.gouge.xbot.widget.AlertWidgetIntents
 
 class MainActivity : ComponentActivity() {
+    private val widgetTarget = mutableStateOf<AlertWidgetTarget?>(null)
+    private val resumeGeneration = mutableIntStateOf(0)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        readWidgetTarget(intent)
         val serverConfigStore = ServerConfigStore(applicationContext)
         val sessionStore = SessionStore(applicationContext)
         val repository = XbotRepository(serverConfigStore, sessionStore)
@@ -27,6 +36,7 @@ class MainActivity : ComponentActivity() {
             serverConfigStore = serverConfigStore,
             sessionStore = sessionStore,
             alertVisibilityStore = alertVisibilityStore,
+            alertSync = AlertDataCoordinator(applicationContext),
             onSignalsChanged = {
                 SignalWidgetScheduler.enqueueImmediate(applicationContext)
             },
@@ -35,8 +45,25 @@ class MainActivity : ComponentActivity() {
         setContent {
             XbotTheme {
                 val mainViewModel: MainViewModel = viewModel(factory = factory)
-                MainScreen(mainViewModel)
+                MainScreen(mainViewModel, widgetTarget.value, resumeGeneration.intValue)
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readWidgetTarget(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumeGeneration.intValue++
+    }
+
+    private fun readWidgetTarget(intent: Intent) {
+        widgetTarget.value = intent.getStringExtra(AlertWidgetIntents.ConfigId)?.let {
+            AlertWidgetTarget(it, intent.getLongExtra(AlertWidgetIntents.AlertId, -1))
         }
     }
 }
@@ -46,6 +73,7 @@ private class MainViewModelFactory(
     private val serverConfigStore: ServerConfigStore,
     private val sessionStore: SessionStore,
     private val alertVisibilityStore: AlertVisibilityStore,
+    private val alertSync: AlertDataCoordinator,
     private val onSignalsChanged: () -> Unit,
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -56,6 +84,7 @@ private class MainViewModelFactory(
                 serverConfigStore = serverConfigStore,
                 sessionStore = sessionStore,
                 alertVisibilityStore = alertVisibilityStore,
+                alertSync = alertSync,
                 onSignalsChanged = onSignalsChanged,
             ) as T
         }

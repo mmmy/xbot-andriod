@@ -29,6 +29,8 @@ class AlertVisibilityStore(context: Context) {
         )
     }
 
+    fun getVisibleIds(): Set<String> = preferences.getStringSet(VisibleIdsKey, emptySet()).orEmpty().toSet()
+
     private fun saveState(visibleIds: Set<String>, knownIds: Set<String>) {
         preferences.edit()
             .putBoolean(InitializedKey, true)

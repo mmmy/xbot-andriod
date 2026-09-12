@@ -107,6 +107,9 @@ data class DeleteTvAlertByIdRequest(
 )
 
 @Serializable
+data class RefreshAlertCacheRequest(val cookieId: String)
+
+@Serializable
 data class OperationResultDto(
     val result: Boolean = false,
     val msg: String = "",
